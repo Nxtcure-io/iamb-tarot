@@ -644,111 +644,385 @@ fn iamb_upload(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
 }
 
 fn iamb_tarot(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
+    use crate::tarot_cards;
+    
     let mut args = desc.arg.strings()?;
 
     if args.is_empty() {
-        let msg = "Usage: :tarot <card-name-or-path>\nExample: :tarot fool\nExample: :tarot threecard\nExample: :tarot /path/to/card.png";
+        let msg = "Usage: :tarot <card-name-or-number> [info] [deepinfo]\nExamples:\n  :tarot fool\n  :tarot fool info\n  :tarot six of swords deepinfo\n  :tarot 3 info\n  :tarot 5 info deepinfo";
         return Result::Err(CommandError::Error(msg.into()));
     }
 
-    if args.len() != 1 {
-        return Result::Err(CommandError::InvalidArgument);
+    // Check for info/deepinfo flags at the end
+    let mut show_info = false;
+    let mut show_deepinfo = false;
+    
+    while let Some(last) = args.last() {
+        if last == "info" {
+            show_info = true;
+            args.pop();
+        } else if last == "deepinfo" {
+            show_deepinfo = true;
+            args.pop();
+        } else {
+            break;
+        }
     }
 
-    let card_arg = args.remove(0);
+    if args.is_empty() {
+        let msg = "No card specified";
+        return Result::Err(CommandError::Error(msg.into()));
+    }
+
+    // Check if first argument is a number (for N-card spreads)
+    if args.len() == 1 {
+        if let Ok(num_cards) = args[0].parse::<usize>() {
+            if num_cards >= 1 && num_cards <= 10 {
+                return handle_n_card_spread(num_cards, show_info, show_deepinfo, ctx);
+            } else {
+                let msg = "Card count must be between 1 and 10";
+                return Err(CommandError::Error(msg.into()));
+            }
+        }
+    }
+
+    // Join all arguments into a single string (for multi-word card names)
+    let card_arg = args.join(" ");
     
-    // Check for spread types
+    // Check for legacy spread types
     if card_arg == "threecard" || card_arg == "three-card" {
-        return handle_three_card_spread(ctx);
+        return handle_n_card_spread(3, show_info, show_deepinfo, ctx);
     }
     
     // Check if it's a full path (contains / or starts with ~)
-    let file_path = if card_arg.contains('/') || card_arg.starts_with('~') {
-        card_arg
+    let is_path = card_arg.contains('/') || card_arg.starts_with('~');
+    let file_path = if is_path {
+        card_arg.clone()
     } else {
-        // Try to find the card in a tarot cards directory
-        // First check if TAROT_CARDS_DIR env var is set
-        if let Ok(tarot_dir) = std::env::var("TAROT_CARDS_DIR") {
-            format!("{}/{}.png", tarot_dir, card_arg.to_lowercase())
-        } else {
-            // Default to ~/.local/share/iamb/tarot_cards/
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-            format!("{}/.local/share/iamb/tarot_cards/{}.png", home, card_arg.to_lowercase())
+        // Look up card in database
+        match tarot_cards::find_card(&card_arg) {
+            Some(card) => {
+                let path = card.image_path();
+                path.to_string_lossy().to_string()
+            },
+            None => {
+                let msg = format!("Card not found: '{}'\nTry: fool, magus, six of swords, science, etc.", card_arg);
+                return Err(CommandError::Error(msg));
+            }
         }
     };
 
-    let sact = SendAction::Upload(file_path);
+    // Upload the card image (with text if info requested)
+    let sact = if show_info || show_deepinfo {
+        // Look up card for info (only if not a direct path)
+        let card_lookup = if is_path {
+            None
+        } else {
+            tarot_cards::find_card(&card_arg)
+        };
+        
+        if let Some(card) = card_lookup {
+            let info_text = format_card_info(card, show_info, show_deepinfo);
+            SendAction::UploadWithText(file_path, info_text)
+        } else {
+            SendAction::Upload(file_path)
+        }
+    } else {
+        SendAction::Upload(file_path)
+    };
+    
     let iact = IambAction::from(sact);
     let step = CommandStep::Continue(iact.into(), ctx.context.clone());
 
     return Ok(step);
 }
 
-fn handle_three_card_spread(ctx: &mut ProgContext) -> ProgResult {
-    use std::fs;
+fn format_card_info(card: &crate::tarot_cards::TarotCard, show_info: bool, show_deepinfo: bool) -> String {
+    let mut text = format!("**{}**", card.card);
     
-    // Get tarot directory
-    let tarot_dir = if let Ok(dir) = std::env::var("TAROT_CARDS_DIR") {
-        dir
-    } else {
-        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-        format!("{}/.local/share/iamb/tarot_cards", home)
-    };
-    
-    // Get all available cards
-    let cards: Vec<String> = match fs::read_dir(&tarot_dir) {
-        Ok(entries) => {
-            entries
-                .filter_map(|entry| {
-                    let entry = entry.ok()?;
-                    let path = entry.path();
-                    if path.extension()? == "png" {
-                        Some(path.to_string_lossy().to_string())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        },
-        Err(_) => {
-            let msg = format!("Could not read tarot cards directory: {}", tarot_dir);
-            return Err(CommandError::Error(msg));
+    if let Some(title) = &card.title {
+        if !title.is_empty() {
+            text.push_str(&format!(" ({})", title));
         }
-    };
+    }
+    text.push_str("\n\n");
     
-    if cards.len() < 3 {
-        let msg = "Not enough tarot cards found. Run setup_tarot.sh first.";
-        return Err(CommandError::Error(msg.into()));
+    if show_info {
+        if let Some(info) = &card.info {
+            text.push_str(info);
+            text.push_str("\n\n");
+        }
     }
     
-    // Select 3 random cards
+    if show_deepinfo {
+        if let Some(deepinfo) = &card.deepinfo {
+            text.push_str(deepinfo);
+            text.push_str("\n\n");
+        }
+    }
+    
+    text
+}
+
+fn handle_n_card_spread(num_cards: usize, show_info: bool, show_deepinfo: bool, ctx: &mut ProgContext) -> ProgResult {
+    use crate::tarot_cards;
+    use crate::tarot_composite;
     use std::collections::HashSet;
+    
+    // Get all available cards
+    let all_cards = tarot_cards::get_all_cards();
+    
+    if all_cards.len() < num_cards {
+        let msg = format!("Not enough tarot cards in database. Need {}, have {}", num_cards, all_cards.len());
+        return Err(CommandError::Error(msg));
+    }
+    
+    // Select N random cards
     let mut rng = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
     
     let mut selected = HashSet::new();
-    while selected.len() < 3 {
+    while selected.len() < num_cards {
         rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
-        let idx = (rng as usize) % cards.len();
+        let idx = (rng as usize) % all_cards.len();
         selected.insert(idx);
     }
     
-    let selected_cards: Vec<usize> = selected.into_iter().collect();
+    let selected_indices: Vec<usize> = selected.into_iter().collect();
     
-    // Create spread with labels
-    let spread = vec![
-        ("🔮 **Past**".to_string(), cards[selected_cards[0]].clone()),
-        ("🔮 **Present**".to_string(), cards[selected_cards[1]].clone()),
-        ("🔮 **Future**".to_string(), cards[selected_cards[2]].clone()),
-    ];
+    // Get card paths and cards
+    let card_paths: Vec<String> = selected_indices
+        .iter()
+        .map(|&idx| all_cards[idx].image_path().to_string_lossy().to_string())
+        .collect();
     
-    let sact = SendAction::TarotSpread(spread);
+    // Create composite image
+    let composite_path = match tarot_composite::save_composite_to_temp(&card_paths) {
+        Ok(path) => path,
+        Err(e) => {
+            let msg = format!("Failed to create composite image: {}", e);
+            return Err(CommandError::Error(msg));
+        }
+    };
+    
+    // Create info text if requested
+    let sact = if show_info || show_deepinfo {
+        let mut info_text = String::new();
+        for (i, &idx) in selected_indices.iter().enumerate() {
+            info_text.push_str(&format!("**Card {}:**\n", i + 1));
+            info_text.push_str(&format_card_info(all_cards[idx], show_info, show_deepinfo));
+            info_text.push_str("\n");
+        }
+        SendAction::UploadWithText(composite_path, info_text)
+    } else {
+        SendAction::Upload(composite_path)
+    };
+    
     let iact = IambAction::from(sact);
     let step = CommandStep::Continue(iact.into(), ctx.context.clone());
 
     return Ok(step);
+}
+
+fn iamb_tarot_history(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
+    use crate::tarot_api;
+    
+    let args = desc.arg.strings()?;
+    
+    // TODO: Get user ID from context properly
+    // For now, use a placeholder - this will be fixed when integrating with the store
+    let matrix_id = "@waqaas:endlessperfect.com".to_string();
+    
+    if args.is_empty() {
+        // Show all readings list
+        return show_history_list(&matrix_id, ctx);
+    }
+    
+    match args[0].as_str() {
+        "suits" | "suit" => {
+            return show_attribute_graph(&matrix_id, "suit", ctx);
+        },
+        "sephira" => {
+            return show_attribute_graph(&matrix_id, "sephira", ctx);
+        },
+        "planets" | "planet" => {
+            return show_attribute_graph(&matrix_id, "planet", ctx);
+        },
+        "signs" | "sign" => {
+            return show_attribute_graph(&matrix_id, "sign", ctx);
+        },
+        "elements" | "element" => {
+            return show_attribute_graph(&matrix_id, "element", ctx);
+        },
+        "summary" => {
+            return show_analytics_summary(&matrix_id, ctx);
+        },
+        num_str => {
+            // Try to parse as reading number
+            if let Ok(reading_num) = num_str.parse::<usize>() {
+                let show_info = args.len() > 1 && args[1] == "info";
+                return show_reading_details(&matrix_id, reading_num, show_info, ctx);
+            } else {
+                let msg = format!("Invalid argument: '{}'\nUsage: :tarothistory [number|suits|sephira|planets|signs|elements|summary]", num_str);
+                return Err(CommandError::Error(msg));
+            }
+        }
+    }
+}
+
+fn show_history_list(matrix_id: &str, _ctx: &mut ProgContext) -> ProgResult {
+    use crate::tarot_api;
+    
+    let history = match tarot_api::get_history(matrix_id) {
+        Ok(h) => h,
+        Err(e) => {
+            let msg = format!("Failed to fetch history: {}", e);
+            return Err(CommandError::Error(msg));
+        }
+    };
+    
+    if history.total_readings == 0 {
+        let msg = "No tarot readings found.\nUse :tarot to perform a reading!";
+        return Err(CommandError::Error(msg.into()));
+    }
+    
+    let mut output = format!("**Tarot Reading History ({} total readings)**\n\n", history.total_readings);
+    
+    for (i, reading) in history.readings.iter().enumerate() {
+        let card_names: Vec<String> = reading.cards.iter().map(|c| c.card_name.clone()).collect();
+        let cards_str = card_names.join(", ");
+        
+        output.push_str(&format!("{}. {} - {}-card spread\n", 
+            i + 1, 
+            &reading.reading_date[..10], // Just the date part
+            reading.card_count
+        ));
+        output.push_str(&format!("   {}\n\n", cards_str));
+    }
+    
+    output.push_str("Use :tarothistory <number> to see details\n");
+    output.push_str("Use :tarothistory suits/sephira/etc for analytics");
+    
+    let msg = CommandError::Error(output);
+    return Err(msg);
+}
+
+fn show_reading_details(matrix_id: &str, reading_num: usize, show_info: bool, _ctx: &mut ProgContext) -> ProgResult {
+    use crate::tarot_api;
+    
+    // First get the list to find the reading_id
+    let history = match tarot_api::get_history(matrix_id) {
+        Ok(h) => h,
+        Err(e) => {
+            let msg = format!("Failed to fetch history: {}", e);
+            return Err(CommandError::Error(msg));
+        }
+    };
+    
+    if reading_num == 0 || reading_num > history.readings.len() {
+        let msg = format!("Invalid reading number. Valid range: 1-{}", history.readings.len());
+        return Err(CommandError::Error(msg));
+    }
+    
+    let reading_id = history.readings[reading_num - 1].reading_id;
+    
+    let details = match tarot_api::get_reading_details(reading_id) {
+        Ok(d) => d,
+        Err(e) => {
+            let msg = format!("Failed to fetch reading details: {}", e);
+            return Err(CommandError::Error(msg));
+        }
+    };
+    
+    let mut output = format!("**Reading #{} - {}**\n", reading_num, &details.reading_date[..10]);
+    output.push_str(&format!("Spread: {}\n\n", details.spread_type));
+    
+    for card in &details.cards {
+        let label = card.label.as_ref().map(|l| format!(" ({})", l)).unwrap_or_default();
+        output.push_str(&format!("**Card {}{}:** {}\n", card.position + 1, label, card.card_name));
+        
+        if show_info {
+            if let Some(info) = &card.info {
+                output.push_str(&format!("{}\n", info));
+            }
+            if let Some(deepinfo) = &card.deepinfo {
+                output.push_str(&format!("{}\n", deepinfo));
+            }
+        }
+        output.push_str("\n");
+    }
+    
+    if let Some(notes) = &details.notes {
+        output.push_str(&format!("Notes: {}\n", notes));
+    }
+    
+    let msg = CommandError::Error(output);
+    return Err(msg);
+}
+
+fn show_attribute_graph(matrix_id: &str, attribute_type: &str, _ctx: &mut ProgContext) -> ProgResult {
+    use crate::tarot_api;
+    
+    let freq = match tarot_api::get_attribute_frequency(matrix_id, attribute_type) {
+        Ok(f) => f,
+        Err(e) => {
+            let msg = format!("Failed to fetch {} frequency: {}", attribute_type, e);
+            return Err(CommandError::Error(msg));
+        }
+    };
+    
+    if freq.total_count == 0 {
+        let msg = format!("No {} data available yet.\nPerform some readings first!", attribute_type);
+        return Err(CommandError::Error(msg.into()));
+    }
+    
+    let mut output = format!("**{} Distribution ({} total)**\n\n", 
+        attribute_type.to_uppercase(), 
+        freq.total_count
+    );
+    
+    let graph = tarot_api::generate_bar_graph(&freq.frequencies, &freq.percentages, 40);
+    output.push_str(&graph);
+    
+    let msg = CommandError::Error(output);
+    return Err(msg);
+}
+
+fn show_analytics_summary(matrix_id: &str, _ctx: &mut ProgContext) -> ProgResult {
+    use crate::tarot_api;
+    
+    let summary = match tarot_api::get_analytics_summary(matrix_id) {
+        Ok(s) => s,
+        Err(e) => {
+            let msg = format!("Failed to fetch analytics summary: {}", e);
+            return Err(CommandError::Error(msg));
+        }
+    };
+    
+    let mut output = format!("**Tarot Analytics Summary**\n\n");
+    output.push_str(&format!("Total Readings: {}\n", summary.total_readings));
+    output.push_str(&format!("Total Cards Drawn: {}\n\n", summary.total_cards_drawn));
+    
+    output.push_str("**Spread Types:**\n");
+    for spread in &summary.spread_types {
+        output.push_str(&format!("  {} - {} readings\n", spread.spread_type, spread.count));
+    }
+    output.push_str("\n");
+    
+    for (attr_type, top_items) in &summary.top_attributes {
+        if !top_items.is_empty() {
+            output.push_str(&format!("**Top {}:**\n", attr_type.to_uppercase()));
+            for item in top_items {
+                output.push_str(&format!("  {} - {}\n", item.value, item.count));
+            }
+            output.push_str("\n");
+        }
+    }
+    
+    let msg = CommandError::Error(output);
+    return Err(msg);
 }
 
 fn iamb_download(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
@@ -894,6 +1168,11 @@ fn add_iamb_commands(cmds: &mut ProgramCommands) {
         name: "tarot".into(),
         aliases: vec![],
         f: iamb_tarot,
+    });
+    cmds.add_command(ProgramCommand {
+        name: "tarothistory".into(),
+        aliases: vec![],
+        f: iamb_tarot_history,
     });
     cmds.add_command(ProgramCommand {
         name: "verify".into(),

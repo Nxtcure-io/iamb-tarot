@@ -486,6 +486,9 @@ pub enum SendAction {
 
     /// Upload a tarot spread (multiple cards with labels).
     TarotSpread(Vec<(String, String)>),
+    
+    /// Upload a file and send accompanying text
+    UploadWithText(String, String),
 }
 
 /// An action performed against the user's homeserver.

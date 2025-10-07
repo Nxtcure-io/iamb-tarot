@@ -661,6 +661,28 @@ impl ChatState {
 
                 (resp.event_id, msg)
             },
+            SendAction::UploadWithText(file, text) => {
+                // Upload the file first
+                let path = Path::new(file.as_str());
+                let mime = mime_guess::from_path(path).first_or(mime::APPLICATION_OCTET_STREAM);
+                let bytes = fs::read(path)?;
+                let name = path
+                    .file_name()
+                    .map(OsStr::to_string_lossy)
+                    .unwrap_or_else(|| Cow::from("Attachment"));
+                let config = AttachmentConfig::new();
+
+                let _ = room
+                    .send_attachment(name.as_ref(), &mime, bytes, config)
+                    .await
+                    .map_err(IambError::from)?;
+
+                // Then send the text message
+                let text_msg = text_to_message(text);
+                let resp = room.send(text_msg.clone()).await.map_err(IambError::from)?;
+
+                (resp.event_id, text_msg)
+            },
         };
 
         if show_echo {
