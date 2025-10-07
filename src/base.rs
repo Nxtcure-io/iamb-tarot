@@ -483,6 +483,9 @@ pub enum SendAction {
 
     /// Upload the image data.
     UploadImage(usize, usize, Cow<'static, [u8]>),
+
+    /// Upload a tarot spread (multiple cards with labels).
+    TarotSpread(Vec<(String, String)>),
 }
 
 /// An action performed against the user's homeserver.
@@ -2074,7 +2077,7 @@ fn complete_cmdarg(
     match cmd.name.as_str() {
         "cancel" | "dms" | "edit" | "redact" | "reply" => vec![],
         "members" | "rooms" | "spaces" | "welcome" => vec![],
-        "download" | "keys" | "open" | "upload" => complete_path(text, cursor),
+        "download" | "keys" | "open" | "upload" | "tarot" => complete_path(text, cursor),
         "react" | "unreact" => complete_emoji(text, cursor, store),
 
         "invite" => complete_users(text, cursor, store),

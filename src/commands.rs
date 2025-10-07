@@ -643,6 +643,114 @@ fn iamb_upload(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
     return Ok(step);
 }
 
+fn iamb_tarot(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
+    let mut args = desc.arg.strings()?;
+
+    if args.is_empty() {
+        let msg = "Usage: :tarot <card-name-or-path>\nExample: :tarot fool\nExample: :tarot threecard\nExample: :tarot /path/to/card.png";
+        return Result::Err(CommandError::Error(msg.into()));
+    }
+
+    if args.len() != 1 {
+        return Result::Err(CommandError::InvalidArgument);
+    }
+
+    let card_arg = args.remove(0);
+    
+    // Check for spread types
+    if card_arg == "threecard" || card_arg == "three-card" {
+        return handle_three_card_spread(ctx);
+    }
+    
+    // Check if it's a full path (contains / or starts with ~)
+    let file_path = if card_arg.contains('/') || card_arg.starts_with('~') {
+        card_arg
+    } else {
+        // Try to find the card in a tarot cards directory
+        // First check if TAROT_CARDS_DIR env var is set
+        if let Ok(tarot_dir) = std::env::var("TAROT_CARDS_DIR") {
+            format!("{}/{}.png", tarot_dir, card_arg.to_lowercase())
+        } else {
+            // Default to ~/.local/share/iamb/tarot_cards/
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+            format!("{}/.local/share/iamb/tarot_cards/{}.png", home, card_arg.to_lowercase())
+        }
+    };
+
+    let sact = SendAction::Upload(file_path);
+    let iact = IambAction::from(sact);
+    let step = CommandStep::Continue(iact.into(), ctx.context.clone());
+
+    return Ok(step);
+}
+
+fn handle_three_card_spread(ctx: &mut ProgContext) -> ProgResult {
+    use std::fs;
+    
+    // Get tarot directory
+    let tarot_dir = if let Ok(dir) = std::env::var("TAROT_CARDS_DIR") {
+        dir
+    } else {
+        let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+        format!("{}/.local/share/iamb/tarot_cards", home)
+    };
+    
+    // Get all available cards
+    let cards: Vec<String> = match fs::read_dir(&tarot_dir) {
+        Ok(entries) => {
+            entries
+                .filter_map(|entry| {
+                    let entry = entry.ok()?;
+                    let path = entry.path();
+                    if path.extension()? == "png" {
+                        Some(path.to_string_lossy().to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        },
+        Err(_) => {
+            let msg = format!("Could not read tarot cards directory: {}", tarot_dir);
+            return Err(CommandError::Error(msg));
+        }
+    };
+    
+    if cards.len() < 3 {
+        let msg = "Not enough tarot cards found. Run setup_tarot.sh first.";
+        return Err(CommandError::Error(msg.into()));
+    }
+    
+    // Select 3 random cards
+    use std::collections::HashSet;
+    let mut rng = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    
+    let mut selected = HashSet::new();
+    while selected.len() < 3 {
+        rng = rng.wrapping_mul(1103515245).wrapping_add(12345);
+        let idx = (rng as usize) % cards.len();
+        selected.insert(idx);
+    }
+    
+    let selected_cards: Vec<usize> = selected.into_iter().collect();
+    
+    // Create spread with labels
+    let spread = vec![
+        ("🔮 **Past**".to_string(), cards[selected_cards[0]].clone()),
+        ("🔮 **Present**".to_string(), cards[selected_cards[1]].clone()),
+        ("🔮 **Future**".to_string(), cards[selected_cards[2]].clone()),
+    ];
+    
+    let sact = SendAction::TarotSpread(spread);
+    let iact = IambAction::from(sact);
+    let step = CommandStep::Continue(iact.into(), ctx.context.clone());
+
+    return Ok(step);
+}
+
 fn iamb_download(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {
     let mut args = desc.arg.strings()?;
 
@@ -781,6 +889,11 @@ fn add_iamb_commands(cmds: &mut ProgramCommands) {
         name: "upload".into(),
         aliases: vec![],
         f: iamb_upload,
+    });
+    cmds.add_command(ProgramCommand {
+        name: "tarot".into(),
+        aliases: vec![],
+        f: iamb_tarot,
     });
     cmds.add_command(ProgramCommand {
         name: "verify".into(),

@@ -628,6 +628,39 @@ impl ChatState {
 
                 (resp.event_id, msg)
             },
+            SendAction::TarotSpread(cards) => {
+                // Upload multiple tarot cards with labels
+                for (label, card_path) in cards {
+                    // Send label as text message
+                    if !label.is_empty() {
+                        let label_msg = text_to_message(label);
+                        let _ = room.send(label_msg).await.map_err(IambError::from)?;
+                    }
+
+                    // Upload the card image
+                    let path = Path::new(card_path.as_str());
+                    let mime = mime_guess::from_path(path).first_or(mime::APPLICATION_OCTET_STREAM);
+                    let bytes = fs::read(path)?;
+                    let name = path
+                        .file_name()
+                        .map(OsStr::to_string_lossy)
+                        .unwrap_or_else(|| Cow::from("Tarot Card"));
+                    let config = AttachmentConfig::new();
+
+                    let _ = room
+                        .send_attachment(name.as_ref(), &mime, bytes, config)
+                        .await
+                        .map_err(IambError::from)?;
+                }
+
+                // Return a dummy response for the last card
+                let msg = TextMessageEventContent::plain("[Tarot Spread Complete]");
+                let msg = MessageType::Text(msg);
+                let msg = RoomMessageEventContent::new(msg);
+                let resp = room.send(msg.clone()).await.map_err(IambError::from)?;
+
+                (resp.event_id, msg)
+            },
         };
 
         if show_echo {
