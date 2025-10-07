@@ -61,6 +61,28 @@ pub struct TopAttribute {
     pub count: i32,
 }
 
+#[derive(Debug, Serialize)]
+pub struct CardData {
+    pub position: i32,
+    pub card_name: String,
+    pub card_label: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReadingCreate {
+    pub matrix_id: String,
+    pub room_id: Option<String>,
+    pub spread_type: String,
+    pub cards: Vec<CardData>,
+    pub notes: Option<String>,
+    pub is_private: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReadingCreateResponse {
+    pub reading_id: i32,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SpreadTypeCount {
     #[serde(rename = "type")]
@@ -163,4 +185,22 @@ pub fn generate_bar_graph(frequencies: &HashMap<String, i32>, percentages: &Hash
     }
     
     lines.join("\n")
+}
+
+/// Save a new tarot reading
+pub fn save_reading(reading: ReadingCreate) -> Result<ReadingCreateResponse, String> {
+    let url = format!("{}/readings", API_BASE_URL);
+    
+    let client = reqwest::blocking::Client::new();
+    let response = client.post(&url)
+        .json(&reading)
+        .send()
+        .map_err(|e| format!("Failed to save reading: {}", e))?;
+    
+    if !response.status().is_success() {
+        return Err(format!("API error: {}", response.status()));
+    }
+    
+    response.json::<ReadingCreateResponse>()
+        .map_err(|e| format!("Failed to parse response: {}", e))
 }

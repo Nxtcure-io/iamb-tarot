@@ -683,6 +683,15 @@ impl ChatState {
 
                 (resp.event_id, text_msg)
             },
+            SendAction::SendText(text) => {
+                // Send formatted text as a message
+                let text_msg = text_to_message(text);
+                let resp = room.send(text_msg.clone()).await.map_err(IambError::from)?;
+
+                self.reset();
+
+                (resp.event_id, text_msg)
+            },
         };
 
         if show_echo {

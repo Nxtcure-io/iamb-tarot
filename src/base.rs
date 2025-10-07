@@ -489,6 +489,9 @@ pub enum SendAction {
     
     /// Upload a file and send accompanying text
     UploadWithText(String, String),
+    
+    /// Send formatted text as a message
+    SendText(String),
 }
 
 /// An action performed against the user's homeserver.

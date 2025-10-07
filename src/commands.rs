@@ -767,6 +767,7 @@ fn format_card_info(card: &crate::tarot_cards::TarotCard, show_info: bool, show_
 fn handle_n_card_spread(num_cards: usize, show_info: bool, show_deepinfo: bool, ctx: &mut ProgContext) -> ProgResult {
     use crate::tarot_cards;
     use crate::tarot_composite;
+    use crate::tarot_api;
     use std::collections::HashSet;
     
     // Get all available cards
@@ -806,6 +807,43 @@ fn handle_n_card_spread(num_cards: usize, show_info: bool, show_deepinfo: bool, 
             return Err(CommandError::Error(msg));
         }
     };
+    
+    // Save reading to API database
+    // TODO: Get actual matrix_id and room_id from context when available
+    // For now, hardcoding to test the integration
+    let matrix_id = "@waqaas:endlessperfect.com".to_string();
+    let room_id = None; // TODO: Get current room ID from context
+    
+    let card_data: Vec<tarot_api::CardData> = selected_indices
+        .iter()
+        .enumerate()
+        .map(|(i, &idx)| tarot_api::CardData {
+            position: i as i32,
+            card_name: all_cards[idx].card.clone(),
+            card_label: Some(format!("Card {}", i + 1)),
+        })
+        .collect();
+    
+    let reading_request = tarot_api::ReadingCreate {
+        matrix_id,
+        room_id,
+        spread_type: num_cards.to_string(),
+        cards: card_data,
+        notes: None,
+        is_private: false,
+    };
+    
+    // Attempt to save the reading (non-blocking, failures are logged but don't stop the reading)
+    match tarot_api::save_reading(reading_request) {
+        Ok(response) => {
+            // Reading saved successfully with ID: response.reading_id
+            // Could add a success message if desired
+        },
+        Err(e) => {
+            // Log error but don't fail the reading
+            eprintln!("Failed to save reading to history: {}", e);
+        }
+    }
     
     // Create info text if requested
     let sact = if show_info || show_deepinfo {
@@ -905,8 +943,10 @@ fn show_history_list(matrix_id: &str, _ctx: &mut ProgContext) -> ProgResult {
     output.push_str("Use :tarothistory <number> to see details\n");
     output.push_str("Use :tarothistory suits/sephira/etc for analytics");
     
-    let msg = CommandError::Error(output);
-    return Err(msg);
+    let sact = SendAction::SendText(output);
+    let iact = IambAction::from(sact);
+    let step = CommandStep::Continue(iact.into(), _ctx.context.clone());
+    return Ok(step);
 }
 
 fn show_reading_details(matrix_id: &str, reading_num: usize, show_info: bool, _ctx: &mut ProgContext) -> ProgResult {
@@ -958,8 +998,10 @@ fn show_reading_details(matrix_id: &str, reading_num: usize, show_info: bool, _c
         output.push_str(&format!("Notes: {}\n", notes));
     }
     
-    let msg = CommandError::Error(output);
-    return Err(msg);
+    let sact = SendAction::SendText(output);
+    let iact = IambAction::from(sact);
+    let step = CommandStep::Continue(iact.into(), _ctx.context.clone());
+    return Ok(step);
 }
 
 fn show_attribute_graph(matrix_id: &str, attribute_type: &str, _ctx: &mut ProgContext) -> ProgResult {
@@ -986,8 +1028,10 @@ fn show_attribute_graph(matrix_id: &str, attribute_type: &str, _ctx: &mut ProgCo
     let graph = tarot_api::generate_bar_graph(&freq.frequencies, &freq.percentages, 40);
     output.push_str(&graph);
     
-    let msg = CommandError::Error(output);
-    return Err(msg);
+    let sact = SendAction::SendText(output);
+    let iact = IambAction::from(sact);
+    let step = CommandStep::Continue(iact.into(), _ctx.context.clone());
+    return Ok(step);
 }
 
 fn show_analytics_summary(matrix_id: &str, _ctx: &mut ProgContext) -> ProgResult {
@@ -1021,8 +1065,10 @@ fn show_analytics_summary(matrix_id: &str, _ctx: &mut ProgContext) -> ProgResult
         }
     }
     
-    let msg = CommandError::Error(output);
-    return Err(msg);
+    let sact = SendAction::SendText(output);
+    let iact = IambAction::from(sact);
+    let step = CommandStep::Continue(iact.into(), _ctx.context.clone());
+    return Ok(step);
 }
 
 fn iamb_download(desc: CommandDescription, ctx: &mut ProgContext) -> ProgResult {

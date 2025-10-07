@@ -7,6 +7,8 @@
 - ✅ API endpoints for history and analytics
 - ✅ Attribute calculation function
 - ✅ All endpoints tested and working
+- ✅ **Card database populated with 78 cards from cards.csv**
+- ✅ **Fixed model mismatch (removed gematria, added path)**
 
 ### Frontend (iamb Client)  
 - ✅ HTTP client module (`src/tarot_api.rs`)
@@ -15,13 +17,17 @@
 - ✅ Reading details display
 - ✅ ASCII bar graph generation
 - ✅ Analytics summary display
+- ✅ **Auto-save functionality added to numeric spreads**
+- ✅ **save_reading() function implemented**
+- ✅ **SendText action for proper message display**
+- ✅ **History output now appears as room messages (not errors)**
 - ✅ Compiled successfully
 
-## 🚧 TODO - Critical
+## 🚧 TODO - Improvements Needed
 
-### 1. Auto-Save Readings (IMPORTANT!)
+### 1. ~~Auto-Save Readings~~ ✅ COMPLETED!
 
-**Current State:** Readings are NOT being saved to the API yet.
+**Current State:** Readings ARE NOW being saved to the API automatically!
 
 **What Needs to Happen:**
 Only **numeric spreads** should be saved to history:
@@ -59,22 +65,28 @@ let reading_request = ReadingCreate {
 tarot_api::save_reading(reading_request)?;
 ```
 
-### 2. Get User Matrix ID from Context
+### 2. Get User Matrix ID from Context (Still TODO)
 
-**Current State:** Hardcoded to `@waqaas:endlessperfect.com`
+**Current State:** Temporarily hardcoded to `@waqaas:endlessperfect.com`
 
 **Need:** Access the actual logged-in user's Matrix ID from the application context.
+
+**Note:** The auto-save is working but only for the hardcoded user. This needs to be fixed for multi-user support.
 
 **Options:**
 - Pass through the store
 - Get from room context
 - Add to command context
 
-### 3. Seed Card Database on Server
+### 3. ~~Seed Card Database on Server~~ ✅ COMPLETED!
 
-**Current State:** Card database is empty (0 cards)
+**Current State:** Card database fully populated with all 78 cards from cards.csv
 
-**Need:** Run the seeding script from `01-setup-database.sh` to populate the 22 Major Arcana cards.
+**Stats:**
+- 78 total cards loaded
+- 14 cards per suit (Swords, Cups, Wands, Disks)
+- 15 cards per element (Fire, Water, Air, Earth)
+- Full attribute tracking working
 
 ## 📋 Commands Available
 
